@@ -1,15 +1,24 @@
 """Generate GitHub profile stat cards as static SVG files.
 
-Uses only the Python standard library and the GITHUB_TOKEN that GitHub Actions
-provides automatically, so no personal token or secret is required.
+Standard library only. Works with the GITHUB_TOKEN that GitHub Actions provides
+automatically (public data), and shows more when a personal access token is
+passed in the same GITHUB_TOKEN variable (see the workflow):
+
+  * all-time totals (every year since the account was created)
+  * merged pull requests, counted separately
+  * private contributions, as ONE anonymous number (no repository names)
 
 Usage: python scripts/generate_stats.py USERNAME OUTPUT_DIR
-Set STATS_FIXTURE=path.json to render from a local JSON file (offline test).
+Environment:
+  GITHUB_TOKEN   API token (built-in or personal access token)
+  STATS_STRICT=1 fail (exit 1) instead of silently dropping the contribution rows
+  STATS_FIXTURE  path to a JSON file to render offline (testing)
 """
 
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
@@ -17,6 +26,7 @@ from html import escape
 
 API = "https://api.github.com"
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
+STRICT = os.environ.get("STATS_STRICT") == "1"
 
 BG, BORDER, TITLE, TEXT, MUTED = "#0d1117", "#30363d", "#58a6ff", "#c9d1d9", "#8b949e"
 FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
@@ -30,6 +40,12 @@ LANG_COLORS = {
 }
 SKIPPED_LANGS = {"HTML", "CSS", "Jupyter Notebook"}
 
+CONTRIB_FIELDS = (
+    "totalCommitContributions totalPullRequestContributions "
+    "totalIssueContributions totalPullRequestReviewContributions "
+    "restrictedContributionsCount contributionCalendar{totalContributions}"
+)
+
 
 def _request(path, data=None):
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "profile-stats"}
@@ -40,8 +56,51 @@ def _request(path, data=None):
         data=json.dumps(data).encode() if data else None,
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:200]
+        raise RuntimeError(f"HTTP {exc.code} from {path}: {body}") from None
+
+
+def _graphql(query, variables):
+    res = _request("/graphql", {"query": query, "variables": variables})
+    if res.get("errors"):
+        raise RuntimeError("GraphQL: " + "; ".join(e.get("message", "?") for e in res["errors"]))
+    return res["data"]
+
+
+def fetch_contributions(user, first_year):
+    """All-time totals (one query per calendar year) plus the last 12 months."""
+    now = datetime.now(timezone.utc)
+    blocks = [f"last: contributionsCollection {{ {CONTRIB_FIELDS} }}"]
+    for year in range(first_year, now.year + 1):
+        start = f"{year}-01-01T00:00:00Z"
+        end = f"{year}-12-31T23:59:59Z" if year < now.year else now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        blocks.append(
+            f'y{year}: contributionsCollection(from: "{start}", to: "{end}") {{ {CONTRIB_FIELDS} }}'
+        )
+    query = (
+        "query($login:String!, $merged:String!) { "
+        f"user(login:$login) {{ {' '.join(blocks)} }} "
+        "merged: search(query:$merged, type:ISSUE, first:1) { issueCount } }"
+    )
+    data = _graphql(query, {"login": user, "merged": f"author:{user} is:pr is:merged"})
+
+    totals = Counter()
+    for key, block in data["user"].items():
+        if key == "last":
+            continue
+        totals["total"] += block["contributionCalendar"]["totalContributions"]
+        totals["commits"] += block["totalCommitContributions"]
+        totals["prs"] += block["totalPullRequestContributions"]
+        totals["issues"] += block["totalIssueContributions"]
+        totals["reviews"] += block["totalPullRequestReviewContributions"]
+        totals["private"] += block["restrictedContributionsCount"]
+    totals["merged_prs"] = data["merged"]["issueCount"]
+    totals["last_year"] = data["user"]["last"]["contributionCalendar"]["totalContributions"]
+    return dict(totals)
 
 
 def fetch(user):
@@ -62,24 +121,13 @@ def fetch(user):
         except Exception as exc:  # keep going if one repo fails
             print(f"warning: languages for {r['name']}: {exc}", file=sys.stderr)
 
+    since = int(profile["created_at"][:4])
     contributions = None
     try:
-        query = (
-            "query($login:String!){user(login:$login){contributionsCollection{"
-            "contributionCalendar{totalContributions}"
-            "totalCommitContributions totalPullRequestContributions "
-            "totalIssueContributions totalPullRequestReviewContributions}}}"
-        )
-        res = _request("/graphql", {"query": query, "variables": {"login": user}})
-        cc = res["data"]["user"]["contributionsCollection"]
-        contributions = {
-            "total": cc["contributionCalendar"]["totalContributions"],
-            "commits": cc["totalCommitContributions"],
-            "prs": cc["totalPullRequestContributions"],
-            "issues": cc["totalIssueContributions"],
-            "reviews": cc["totalPullRequestReviewContributions"],
-        }
+        contributions = fetch_contributions(user, since)
     except Exception as exc:
+        if STRICT:
+            raise SystemExit(f"error: contributions unavailable: {exc}")
         print(f"warning: contributions unavailable: {exc}", file=sys.stderr)
 
     return {
@@ -89,21 +137,27 @@ def fetch(user):
         "public_repos": len(repos),
         "stars": sum(r["stargazers_count"] for r in repos),
         "forks": sum(r["forks_count"] for r in repos),
-        "since": profile["created_at"][:4],
+        "since": since,
         "languages": dict(langs),
         "contributions": contributions,
     }
 
 
-def _frame(width, height, title, body):
+def _frame(width, height, title, subtitle, body):
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sub = (
+        f'<text x="24" y="56" font-family="{FONT}" font-size="12" fill="{MUTED}">'
+        f"{escape(subtitle)}</text>"
+        if subtitle
+        else ""
+    )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="{escape(title)}">'
         f'<rect x=".5" y=".5" width="{width - 1}" height="{height - 1}" rx="8" '
         f'fill="{BG}" stroke="{BORDER}"/>'
         f'<text x="24" y="36" font-family="{FONT}" font-size="18" font-weight="600" '
-        f'fill="{TITLE}">{escape(title)}</text>{body}'
+        f'fill="{TITLE}">{escape(title)}</text>{sub}{body}'
         f'<text x="{width - 24}" y="{height - 12}" text-anchor="end" font-family="{FONT}" '
         f'font-size="10" fill="{MUTED}">updated {stamp}</text></svg>'
     )
@@ -118,15 +172,23 @@ def overview_svg(d):
         ("Followers", d["followers"]),
         ("On GitHub since", d["since"]),
     ]
+    subtitle = ""
     if c:
-        rows = [
-            ("Contributions, last year", c["total"]),
+        subtitle = f"All time, since {d['since']}"
+        head = [
+            ("Contributions", c["total"]),
             ("Commits", c["commits"]),
-            ("Pull requests", c["prs"]),
+            ("Pull requests opened", c["prs"]),
+            ("Pull requests merged", c["merged_prs"]),
             ("Issues opened", c["issues"]),
             ("Code reviews", c["reviews"]),
-        ] + rows
-    row_h, top = 28, 62
+        ]
+        if c.get("private"):
+            head.append(("Private contributions (anonymous)", c["private"]))
+            subtitle += ", including anonymous private activity"
+        head.append(("Contributions, last 12 months", c["last_year"]))
+        rows = head + rows
+    row_h, top = 28, 80 if subtitle else 62
     body = ""
     for i, (label, value) in enumerate(rows):
         y = top + i * row_h
@@ -137,7 +199,7 @@ def overview_svg(d):
             f'font-weight="600" fill="{TEXT}">{escape(str(value))}</text>'
         )
     height = top + len(rows) * row_h + 14
-    return _frame(470, height, f"{d['name']}'s GitHub stats", body)
+    return _frame(470, height, f"{d['name']}'s GitHub stats", subtitle, body)
 
 
 def languages_svg(d, limit=8):
@@ -162,7 +224,7 @@ def languages_svg(d, limit=8):
             f"{escape(name)} <tspan fill=\"{MUTED}\">{size / total:.1%}</tspan></text>"
         )
     rows = (len(top) + 1) // 2
-    return _frame(470, 100 + max(rows, 1) * 26 + 18, "Most used languages", body)
+    return _frame(470, 100 + max(rows, 1) * 26 + 18, "Most used languages", "", body)
 
 
 def main():

@@ -26,7 +26,11 @@ jobs:
 
       - name: Generate SVG cards
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uses your personal token when the METRICS_TOKEN secret exists
+          # (adds the anonymous private total), otherwise the built-in token.
+          GITHUB_TOKEN: ${{ secrets.METRICS_TOKEN || secrets.GITHUB_TOKEN }}
+          # Fail loudly (keep the old cards) instead of silently dropping rows.
+          STATS_STRICT: "1"
         run: python scripts/generate_stats.py "${{ github.repository_owner }}" assets
 
       - name: Commit if changed
