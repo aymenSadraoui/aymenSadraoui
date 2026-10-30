@@ -6,7 +6,9 @@ on:
   workflow_dispatch: # manual run from the Actions tab
   push:
     branches: [main]
-    paths: [".github/workflows/metrics.yml"]
+    paths:
+      - ".github/workflows/metrics.yml"
+      - "scripts/generate_stats.py"
 
 permissions:
   contents: write
@@ -16,46 +18,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  metrics:
-    name: Generate GitHub metrics
+  stats:
+    name: Generate stat cards
     runs-on: ubuntu-latest
     steps:
-      # 1) Overview card: activity, contributions, repositories, community
-      - name: Overview card
-        uses: lowlighter/metrics@latest
-        with:
-          token: ${{ secrets.METRICS_TOKEN }}
-          user: aymenSadraoui
-          template: classic
-          filename: assets/metrics-overview.svg
-          output_action: commit
-          committer_message: "chore: update overview stats [skip ci]"
-          base: header, activity, community, repositories, metadata
-          base_indepth: yes
-          config_timezone: Europe/Paris
-          config_display: regular
-          repositories_forks: no
-          plugin_isocalendar: yes
-          plugin_isocalendar_duration: full-year
+      - uses: actions/checkout@v4
 
-      # 2) Languages card
-      - name: Languages card
-        uses: lowlighter/metrics@latest
-        with:
-          token: ${{ secrets.METRICS_TOKEN }}
-          user: aymenSadraoui
-          template: classic
-          filename: assets/metrics-languages.svg
-          output_action: commit
-          committer_message: "chore: update language stats [skip ci]"
-          base: ""
-          config_timezone: Europe/Paris
-          plugin_languages: yes
-          plugin_languages_sections: most-used
-          plugin_languages_details: bytes-size, percentage
-          plugin_languages_limit: 8
-          plugin_languages_threshold: 2%
-          plugin_languages_skipped: jupyter notebook, html, css
+      - name: Generate SVG cards
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/generate_stats.py "${{ github.repository_owner }}" assets
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/*.svg
+          if git diff --cached --quiet; then
+            echo "No changes."
+          else
+            git commit -m "chore: update profile stats [skip ci]"
+            git push
+          fi
 
   snake:
     name: Generate contribution snake
