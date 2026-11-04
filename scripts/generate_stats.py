@@ -29,11 +29,11 @@ TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STRICT = os.environ.get("STATS_STRICT") == "1"
 
 BG, BORDER, TITLE, TEXT, MUTED = (
-    "#0d111700",
-    "#30363d16",
-    "#58a6ff",
-    "#c9d1d9",
-    "#8b949e",
+    "#f8fafc",
+    "#dfe7f2",
+    "#1d4ed8",
+    "#0f172a",
+    "#64748b",
 )
 FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 FALLBACK_COLOR = "#8b949e"
@@ -54,7 +54,7 @@ LANG_COLORS = {
     "Go": "#00ADD8",
     "Rust": "#dea584",
     "SQL": "#e38c00",
-    "Makefile": "#427819",
+    "justfile": "#427819",
 }
 SKIPPED_LANGS = {"HTML", "CSS", "Jupyter Notebook"}
 
