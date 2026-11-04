@@ -28,15 +28,33 @@ API = "https://api.github.com"
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STRICT = os.environ.get("STATS_STRICT") == "1"
 
-BG, BORDER, TITLE, TEXT, MUTED = "#0d1117", "#30363d", "#58a6ff", "#c9d1d9", "#8b949e"
+BG, BORDER, TITLE, TEXT, MUTED = (
+    "#0d111700",
+    "#30363d16",
+    "#58a6ff",
+    "#c9d1d9",
+    "#8b949e",
+)
 FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 FALLBACK_COLOR = "#8b949e"
 LANG_COLORS = {
-    "Python": "#3572A5", "Jupyter Notebook": "#DA5B0B", "JavaScript": "#f1e05a",
-    "TypeScript": "#3178c6", "Shell": "#89e051", "Dockerfile": "#384d54",
-    "C++": "#f34b7d", "C": "#555555", "Java": "#b07219", "HTML": "#e34c26",
-    "CSS": "#563d7c", "R": "#198CE7", "MATLAB": "#e16737", "Go": "#00ADD8",
-    "Rust": "#dea584", "SQL": "#e38c00", "Makefile": "#427819",
+    "Python": "#3572A5",
+    "Jupyter Notebook": "#DA5B0B",
+    "JavaScript": "#f1e05a",
+    "TypeScript": "#3178c6",
+    "Shell": "#89e051",
+    "Dockerfile": "#384d54",
+    "C++": "#f34b7d",
+    "C": "#555555",
+    "Java": "#b07219",
+    "HTML": "#e34c26",
+    "CSS": "#563d7c",
+    "R": "#198CE7",
+    "MATLAB": "#e16737",
+    "Go": "#00ADD8",
+    "Rust": "#dea584",
+    "SQL": "#e38c00",
+    "Makefile": "#427819",
 }
 SKIPPED_LANGS = {"HTML", "CSS", "Jupyter Notebook"}
 
@@ -67,7 +85,9 @@ def _request(path, data=None):
 def _graphql(query, variables):
     res = _request("/graphql", {"query": query, "variables": variables})
     if res.get("errors"):
-        raise RuntimeError("GraphQL: " + "; ".join(e.get("message", "?") for e in res["errors"]))
+        raise RuntimeError(
+            "GraphQL: " + "; ".join(e.get("message", "?") for e in res["errors"])
+        )
     return res["data"]
 
 
@@ -77,7 +97,11 @@ def fetch_contributions(user, first_year):
     blocks = [f"last: contributionsCollection {{ {CONTRIB_FIELDS} }}"]
     for year in range(first_year, now.year + 1):
         start = f"{year}-01-01T00:00:00Z"
-        end = f"{year}-12-31T23:59:59Z" if year < now.year else now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = (
+            f"{year}-12-31T23:59:59Z"
+            if year < now.year
+            else now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        )
         blocks.append(
             f'y{year}: contributionsCollection(from: "{start}", to: "{end}") {{ {CONTRIB_FIELDS} }}'
         )
@@ -99,7 +123,9 @@ def fetch_contributions(user, first_year):
         totals["reviews"] += block["totalPullRequestReviewContributions"]
         totals["private"] += block["restrictedContributionsCount"]
     totals["merged_prs"] = data["merged"]["issueCount"]
-    totals["last_year"] = data["user"]["last"]["contributionCalendar"]["totalContributions"]
+    totals["last_year"] = data["user"]["last"]["contributionCalendar"][
+        "totalContributions"
+    ]
     return dict(totals)
 
 
@@ -221,7 +247,7 @@ def languages_svg(d, limit=8):
         body += (
             f'<circle cx="{px + 5}" cy="{py - 4}" r="5" fill="{color}"/>'
             f'<text x="{px + 18}" y="{py}" font-family="{FONT}" font-size="13" fill="{TEXT}">'
-            f"{escape(name)} <tspan fill=\"{MUTED}\">{size / total:.1%}</tspan></text>"
+            f'{escape(name)} <tspan fill="{MUTED}">{size / total:.1%}</tspan></text>'
         )
     rows = (len(top) + 1) // 2
     return _frame(470, 100 + max(rows, 1) * 26 + 18, "Most used languages", "", body)
